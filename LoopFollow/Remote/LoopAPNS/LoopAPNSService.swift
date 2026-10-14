@@ -214,8 +214,10 @@ class LoopAPNSService {
         // Create the complete notification payload (matching Nightscout's exact format)
         // Based on Nightscout's loop.js implementation
         let bolusAmount = payload.bolusAmount ?? 0.0
+        let startTime = payload.consumedDate ?? now
         var finalPayload = [
-            "bolus-entry": bolusAmount, "start-time": formatDateForAPNS(startTime),
+            "bolus-entry": bolusAmount,
+            "start-time": formatDateForAPNS(startTime),
             "otp": String(payload.otp),
             "remote-address": "LoopFollow",
             "notes": "Sent via LoopFollow APNS",
