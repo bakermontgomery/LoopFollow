@@ -264,7 +264,23 @@ extension MainViewController {
         } else if let serverText = serverText {
             Observable.shared.serverText.value = serverText
         }
-    }            let latestEntryIndex = entries.count - 1
+    }
+
+    // NS BG Data Front end updater
+    func viewUpdateNSBG(sourceName: String) {
+        DispatchQueue.main.async {
+            TaskScheduler.shared.rescheduleTask(id: .minAgoUpdate, to: Date())
+
+            let entries = self.bgData
+            if entries.count < 2 { // Protect index out of bounds
+                Storage.shared.lastBGChecked.value = Date()
+                return
+            }
+
+            self.updateBGGraph()
+            self.updateStats()
+
+            let latestEntryIndex = entries.count - 1
             let latestBG = entries[latestEntryIndex].sgv
             let lastBGTime = entries[latestEntryIndex].date
             // 5-minute delta: compare the latest reading against the reading
@@ -284,26 +300,6 @@ extension MainViewController {
                 }
             }
             let deltaBG = latestBG - priorBG
-
-    // NS BG Data Front end updater
-    func viewUpdateNSBG(sourceName: String) {
-        DispatchQueue.main.async {
-            TaskScheduler.shared.rescheduleTask(id: .minAgoUpdate, to: Date())
-
-            let entries = self.bgData
-            if entries.count < 2 { // Protect index out of bounds
-                Storage.shared.lastBGChecked.value = Date()
-                return
-            }
-
-            self.updateBGGraph()
-            self.updateStats()
-
-            let latestEntryIndex = entries.count - 1
-            let latestBG = entries[latestEntryIndex].sgv
-            let priorBG = entries[latestEntryIndex - 1].sgv
-            let deltaBG = latestBG - priorBG
-            let lastBGTime = entries[latestEntryIndex].date
 
             self.updateServerText(with: sourceName)
 
