@@ -22,12 +22,25 @@ struct LoopAPNSBolusView: View {
     @State private var otpTimeRemaining: Int? = nil
     @State private var showOldCalculationWarning = false
     @State private var showTOTPWarning = false
+    @State private var bolusDate = Date()
+    @State private var showDatePickerSheet = false
     private let otpPeriod: TimeInterval = 30
+    private let timeAdjustmentStepMinutes = 5
+    private let maxPastHours = 4
+    private let maxFutureHours = 4
     private var otpTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     // Computed property to check if TOTP should be blocked
     private var isTOTPBlocked: Bool {
         TOTPService.shared.isTOTPBlocked(qrCodeURL: Storage.shared.loopAPNSQrCodeURL.value)
+    }
+
+    private var oldestAcceptedDate: Date {
+        Date().addingTimeInterval(-TimeInterval(maxPastHours) * 60 * 60)
+    }
+
+    private var latestAcceptedDate: Date {
+        Date().addingTimeInterval(TimeInterval(maxFutureHours) * 60 * 60)
     }
 
     enum AlertType {
@@ -112,6 +125,46 @@ struct LoopAPNSBolusView: View {
                                 showAlert = true
                             }
                         )
+
+                        HStack(spacing: 8) {
+                            Text("Time")
+
+                            Spacer()
+
+                            Button(action: {
+                                adjustBolusDate(byMinutes: -timeAdjustmentStepMinutes)
+                            }) {
+                                Image(systemName: "minus")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundColor(Color(.systemGray6))
+                                    .frame(width: 28, height: 28)
+                                    .background(Color.blue)
+                                    .clipShape(Circle())
+                            }
+                            .buttonStyle(.plain)
+
+                            Button(action: {
+                                showDatePickerSheet = true
+                            }) {
+                                Text(bolusDate, format: Date.FormatStyle().hour().minute())
+                                    .font(.body.monospacedDigit())
+                                    .foregroundColor(.primary)
+                                    .frame(minWidth: 58)
+                            }
+                            .buttonStyle(.plain)
+
+                            Button(action: {
+                                adjustBolusDate(byMinutes: timeAdjustmentStepMinutes)
+                            }) {
+                                Image(systemName: "plus")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundColor(Color(.systemGray6))
+                                    .frame(width: 28, height: 28)
+                                    .background(Color.blue)
+                                    .clipShape(Circle())
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
 
                     // Warning section for recommended bolus age
@@ -202,6 +255,38 @@ struct LoopAPNSBolusView: View {
                 .navigationBarTitleDisplayMode(.inline)
             }
 
+            .sheet(isPresented: $showDatePickerSheet) {
+                NavigationStack {
+                    VStack {
+                        DatePicker(
+                            "Time",
+                            selection: Binding(
+                                get: { bolusDate },
+                                set: { bolusDate = clampedBolusDate($0) }
+                            ),
+                            in: oldestAcceptedDate ... latestAcceptedDate,
+                            displayedComponents: [.hourAndMinute, .date]
+                        )
+                        .datePickerStyle(.wheel)
+                        .labelsHidden()
+                        .padding()
+
+                        Spacer()
+                    }
+                    .navigationTitle("Bolus Time")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") {
+                                bolusDate = clampedBolusDate(bolusDate)
+                                showDatePickerSheet = false
+                            }
+                        }
+                    }
+                }
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+            }
             .onAppear {
                 // Validate APNS setup
                 let apnsService = LoopAPNSService()
@@ -354,6 +439,25 @@ struct LoopAPNSBolusView: View {
             return
         }
 
+        // Validate time constraints: bolus time must be within +/-4 hours
+        let now = Date()
+        let oldestAcceptedDate = now.addingTimeInterval(-60 * 60 * Double(maxPastHours))
+        let latestAcceptedDate = now.addingTimeInterval(60 * 60 * Double(maxFutureHours))
+
+        if bolusDate < oldestAcceptedDate {
+            alertMessage = "Time must be within the prior \(maxPastHours) hours"
+            alertType = .error
+            showAlert = true
+            return
+        }
+
+        if bolusDate > latestAcceptedDate {
+            alertMessage = "Time must be within the next \(maxFutureHours) hours"
+            alertType = .error
+            showAlert = true
+            return
+        }
+
         alertType = .confirmation
         showAlert = true
     }
@@ -392,9 +496,14 @@ struct LoopAPNSBolusView: View {
             return
         }
 
+        // Send the chosen bolus time the same way carbs sends its
+        // start-time. We "randomize" the milliseconds to avoid issues
+        // with NS which doesn't allow entries at the same second.
+        let adjustedBolusDate = bolusDate.dateUsingCurrentSeconds()
         let payload = LoopAPNSPayload(
             type: .bolus,
             bolusAmount: insulinAmount.doubleValue(for: .internationalUnit()),
+            consumedDate: adjustedBolusDate,
             otp: otpCode
         )
 
@@ -426,5 +535,14 @@ struct LoopAPNSBolusView: View {
                 self.showAlert = true
             }
         }
+    }
+
+    private func adjustBolusDate(byMinutes minutes: Int) {
+        let adjustedDate = Calendar.current.date(byAdding: .minute, value: minutes, to: bolusDate) ?? bolusDate
+        bolusDate = clampedBolusDate(adjustedDate)
+    }
+
+    private func clampedBolusDate(_ date: Date) -> Date {
+        min(max(date, oldestAcceptedDate), latestAcceptedDate)
     }
 }
