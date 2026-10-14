@@ -264,7 +264,26 @@ extension MainViewController {
         } else if let serverText = serverText {
             Observable.shared.serverText.value = serverText
         }
-    }
+    }            let latestEntryIndex = entries.count - 1
+            let latestBG = entries[latestEntryIndex].sgv
+            let lastBGTime = entries[latestEntryIndex].date
+            // 5-minute delta: compare the latest reading against the reading
+            // closest to 5 minutes before it, not the immediately preceding
+            // entry. The preceding entry can be a duplicate of the latest
+            // reading written by a second uploader (same value, seconds to a
+            // few minutes apart), which pinned the displayed delta at 0.
+            // Falls back to the previous entry when no reading is old enough.
+            var priorBG = entries[latestEntryIndex - 1].sgv
+            let targetTime = lastBGTime - 300
+            var bestTimeDiff = Double.greatestFiniteMagnitude
+            for entry in entries.dropLast() where entry.date <= lastBGTime - 240 {
+                let diff = abs(entry.date - targetTime)
+                if diff < bestTimeDiff {
+                    bestTimeDiff = diff
+                    priorBG = entry.sgv
+                }
+            }
+            let deltaBG = latestBG - priorBG
 
     // NS BG Data Front end updater
     func viewUpdateNSBG(sourceName: String) {
