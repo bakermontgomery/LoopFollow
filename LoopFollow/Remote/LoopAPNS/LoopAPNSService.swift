@@ -160,6 +160,12 @@ class LoopAPNSService {
             "alert": "Remote Carbs Entry: \(String(format: "%.1f", carbsAmount)) grams\nAbsorption Time: \(String(format: "%.1f", absorptionTime)) hours",
         ] as [String: Any]
 
+        // Loop's remote carbs command reads the food type from the "food-type" key
+        // (NightscoutServiceKit CarbRemoteNotification) — include it when one was entered.
+        if let foodType = payload.foodType, !foodType.isEmpty {
+            finalPayload["food-type"] = foodType
+        }
+
         // Encrypt and include return notification info using OTP
         if let returnInfo = createReturnNotificationInfo() {
             LogManager.shared.log(category: .apns, message: "Created return notification info for carbs - deviceToken: \(LogRedactor.head(returnInfo.deviceToken)), bundleId: \(LogRedactor.bundleId(returnInfo.bundleId))")
@@ -178,7 +184,7 @@ class LoopAPNSService {
         LogManager.shared.log(category: .apns, message: "Absorption time - Raw: \(payload.absorptionTime ?? 3.0), Formatted: \(String(format: "%.1f", absorptionTime)), JSON: \(absorptionTime)")
 
         // Log carbs entry attempt
-        LogManager.shared.log(category: .apns, message: "Sending carbs: \(String(format: "%.1f", carbsAmount))g, absorption: \(String(format: "%.1f", absorptionTime))h")
+        LogManager.shared.log(category: .apns, message: "Sending carbs: \(String(format: "%.1f", carbsAmount))g, absorption: \(String(format: "%.1f", absorptionTime))h, foodType: \(payload.foodType ?? "none")")
 
         sendAPNSNotification(
             deviceToken: deviceToken,
