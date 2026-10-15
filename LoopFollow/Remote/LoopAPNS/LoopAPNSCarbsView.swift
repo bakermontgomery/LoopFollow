@@ -56,6 +56,17 @@ struct LoopAPNSCarbsView: View {
         String(format: "%.1f", absorptionTimeValue)
     }
 
+    private var confirmationMessage: String {
+        let timeFormatter = DateFormatter()
+        timeFormatter.timeStyle = .short
+        timeFormatter.dateStyle = .short
+        var message = "Send \(Int(carbsAmount.doubleValue(for: .gram())))g of carbs with \(absorptionConfirmationText)h absorption time at \(timeFormatter.string(from: consumedDate))?"
+        if !foodType.isEmpty {
+            message += "\nFood Type: \(foodType)"
+        }
+        return message
+    }
+
     private var minimumAbsorptionPreset: AbsorptionPreset {
         let minimumAbsorptionMinutes = Int(minAllowedAbsorptionTime * 60)
         return (minimumAbsorptionMinutes / 60, minimumAbsorptionMinutes % 60)
@@ -234,6 +245,21 @@ struct LoopAPNSCarbsView: View {
                                         .frame(width: 42, height: 42)
                                         .background(foodType == "🍽️" ? Color.white.opacity(0.12) : Color.clear)
                                         .cornerRadius(12)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+
+                        HStack(spacing: 8) {
+                            TextField("Custom food type", text: $foodType)
+                                .textInputAutocapitalization(.words)
+
+                            if !foodType.isEmpty {
+                                Button(action: {
+                                    foodType = ""
+                                }) {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundColor(.secondary)
                                 }
                                 .buttonStyle(.plain)
                             }
@@ -468,12 +494,9 @@ struct LoopAPNSCarbsView: View {
                         dismissButton: .default(Text("OK"))
                     )
                 case .confirmation:
-                    let timeFormatter = DateFormatter()
-                    timeFormatter.timeStyle = .short
-                    timeFormatter.dateStyle = .short
                     return Alert(
                         title: Text("Confirm Carbs"),
-                        message: Text("Send \(Int(carbsAmount.doubleValue(for: .gram())))g of carbs with \(absorptionConfirmationText)h absorption time at \(timeFormatter.string(from: consumedDate))?"),
+                        message: Text(confirmationMessage),
                         primaryButton: .default(Text("Send")) {
                             sendCarbsConfirmed()
                         },
