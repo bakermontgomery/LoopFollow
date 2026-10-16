@@ -126,7 +126,26 @@ class LoopAPNSService {
     /// - Parameters:
     ///   - payload: The carbs payload to send
     ///   - completion: Completion handler with success status and error message
-    func sendCarbsViaAPNS(payload: LoopAPNSPayload, completion: @escaping (Bool, String?) -> Void) {
+    func sendCarbsViaAPNS(payload: LoopAPNSPayload, isRetry: Bool = false, completion: @escaping (Bool, String?) -> Void) {
+        performWithFreshOTP { [weak self] freshOTP in
+            guard let self, let freshOTP else {
+                completion(false, "Could not generate a fresh one-time password")
+                return
+            }
+            let effectivePayload = LoopAPNSPayload(
+                type: .carbs,
+                carbsAmount: payload.carbsAmount,
+                absorptionTime: payload.absorptionTime,
+                foodType: payload.foodType,
+                consumedDate: payload.consumedDate,
+                otp: freshOTP
+            )
+            recordPendingRemoteCommand(payload: effectivePayload, isRetry: isRetry)
+            sendCarbsViaAPNSWithOTP(payload: effectivePayload, completion: completion)
+        }
+    }
+
+    private func sendCarbsViaAPNSWithOTP(payload: LoopAPNSPayload, completion: @escaping (Bool, String?) -> Void) {
         guard validateSetup() else {
             let errorMessage = "Loop APNS Configuration not valid"
             LogManager.shared.log(category: .apns, message: errorMessage)
@@ -201,7 +220,24 @@ class LoopAPNSService {
     /// - Parameters:
     ///   - payload: The bolus payload to send
     ///   - completion: Completion handler with success status and error message
-    func sendBolusViaAPNS(payload: LoopAPNSPayload, completion: @escaping (Bool, String?) -> Void) {
+    func sendBolusViaAPNS(payload: LoopAPNSPayload, isRetry: Bool = false, completion: @escaping (Bool, String?) -> Void) {
+        performWithFreshOTP { [weak self] freshOTP in
+            guard let self, let freshOTP else {
+                completion(false, "Could not generate a fresh one-time password")
+                return
+            }
+            let effectivePayload = LoopAPNSPayload(
+                type: .bolus,
+                bolusAmount: payload.bolusAmount,
+                consumedDate: payload.consumedDate,
+                otp: freshOTP
+            )
+            recordPendingRemoteCommand(payload: effectivePayload, isRetry: isRetry)
+            sendBolusViaAPNSWithOTP(payload: effectivePayload, completion: completion)
+        }
+    }
+
+    private func sendBolusViaAPNSWithOTP(payload: LoopAPNSPayload, completion: @escaping (Bool, String?) -> Void) {
         guard validateSetup() else {
             let errorMessage = "Loop APNS Configuration not valid"
             LogManager.shared.log(category: .apns, message: errorMessage)
@@ -774,5 +810,140 @@ class LoopAPNSService {
             payload: payload,
             completion: completion
         )
+    }
+}
+
+// MARK: - OTP freshness + one automatic retry on an expired-password rejection
+
+/// A remote bolus/carbs command that has been sent but not yet confirmed by Loop.
+/// Stored so that if Loop rejects it because its one-time password expired
+/// ("Only the last 2 passwords are accepted"), the command can be resent once
+/// with a fresh password. That specific error guarantees Loop did not act on
+/// the command, so resending once is safe.
+struct PendingRemoteCommand: Codable {
+    var type: String // "bolus" or "carbs"
+    var bolusAmount: Double?
+    var carbsAmount: Double?
+    var absorptionTime: Double?
+    var foodType: String?
+    var consumedDate: Date?
+    var otp: String
+    var sentAt: Date
+    var retried: Bool
+}
+
+extension LoopAPNSService {
+    private static let pendingCommandKey = "PendingRemoteCommand"
+    private static let otpStep: TimeInterval = 30
+    /// If fewer than this many seconds remain in the current OTP step, wait for
+    /// the next step so the password is born with its full validity window.
+    private static let otpStepGuard: TimeInterval = 10
+
+    /// Runs `action` with a one-time password generated at send time. If the
+    /// current password is about to rotate, waits for the next one first.
+    func performWithFreshOTP(_ action: @escaping (String?) -> Void) {
+        let qrCodeURL = Storage.shared.loopAPNSQrCodeURL.value
+        let remaining = Self.otpStep - Date().timeIntervalSince1970.truncatingRemainder(dividingBy: Self.otpStep)
+        if remaining < Self.otpStepGuard {
+            DispatchQueue.main.asyncAfter(deadline: .now() + remaining + 0.3) {
+                let otp = TOTPGenerator.extractOTPFromURL(qrCodeURL)
+                if otp != nil {
+                    TOTPService.shared.markTOTPAsUsed(qrCodeURL: qrCodeURL)
+                }
+                action(otp)
+            }
+        } else {
+            let otp = TOTPGenerator.extractOTPFromURL(qrCodeURL)
+            if otp != nil {
+                TOTPService.shared.markTOTPAsUsed(qrCodeURL: qrCodeURL)
+            }
+            action(otp)
+        }
+    }
+
+    func recordPendingRemoteCommand(payload: LoopAPNSPayload, isRetry: Bool) {
+        let pending = PendingRemoteCommand(
+            type: payload.type == .bolus ? "bolus" : "carbs",
+            bolusAmount: payload.bolusAmount,
+            carbsAmount: payload.carbsAmount,
+            absorptionTime: payload.absorptionTime,
+            foodType: payload.foodType,
+            consumedDate: payload.consumedDate,
+            otp: payload.otp,
+            sentAt: Date(),
+            retried: isRetry
+        )
+        if let data = try? JSONEncoder().encode(pending) {
+            UserDefaults.standard.set(data, forKey: Self.pendingCommandKey)
+        }
+    }
+
+    func loadPendingRemoteCommand() -> PendingRemoteCommand? {
+        guard let data = UserDefaults.standard.data(forKey: Self.pendingCommandKey) else { return nil }
+        return try? JSONDecoder().decode(PendingRemoteCommand.self, from: data)
+    }
+
+    func clearPendingRemoteCommand() {
+        UserDefaults.standard.removeObject(forKey: Self.pendingCommandKey)
+    }
+
+    /// Called with the body of every return notification from Loop.
+    /// If Loop rejected the pending command because its password expired, the
+    /// command is resent once with a fresh password. Any other return that
+    /// names the pending command's password resolves it, so it is cleared.
+    func processReturnNotification(body: String) {
+        guard let pending = loadPendingRemoteCommand() else { return }
+
+        let isOTPExpiry = body.localizedCaseInsensitiveContains("last 2 passwords")
+            && body.localizedCaseInsensitiveContains("expired")
+
+        if isOTPExpiry {
+            // When the rejection names the rejected password, only retry if it
+            // is the pending command's password.
+            if let rejectedOTP = extractOTPFromReturnBody(body), rejectedOTP != pending.otp {
+                return
+            }
+            guard !pending.retried, Date().timeIntervalSince(pending.sentAt) < 600 else { return }
+
+            // Mark as retried synchronously so a duplicate delivery of the same
+            // notification cannot trigger a second resend.
+            var marked = pending
+            marked.retried = true
+            if let data = try? JSONEncoder().encode(marked) {
+                UserDefaults.standard.set(data, forKey: Self.pendingCommandKey)
+            }
+
+            LogManager.shared.log(category: .apns, message: "Loop rejected the pending \(pending.type) command: password expired. Auto-retrying once with a fresh password.")
+
+            // For a bolus, send at the retry time; for carbs, keep the
+            // originally intended consumption time.
+            let payload = LoopAPNSPayload(
+                type: pending.type == "bolus" ? .bolus : .carbs,
+                carbsAmount: pending.carbsAmount,
+                absorptionTime: pending.absorptionTime,
+                foodType: pending.foodType,
+                bolusAmount: pending.bolusAmount,
+                consumedDate: pending.type == "carbs" ? pending.consumedDate : nil,
+                otp: pending.otp
+            )
+            if pending.type == "bolus" {
+                sendBolusViaAPNS(payload: payload, isRetry: true) { success, error in
+                    LogManager.shared.log(category: .apns, message: "Auto-retry bolus send: success=\(success), error=\(error ?? "none")")
+                }
+            } else {
+                sendCarbsViaAPNS(payload: payload, isRetry: true) { success, error in
+                    LogManager.shared.log(category: .apns, message: "Auto-retry carbs send: success=\(success), error=\(error ?? "none")")
+                }
+            }
+        } else if body.contains(pending.otp) {
+            // A non-expiry return naming this command's password (delivered, or
+            // failed for a different reason) resolves the pending command.
+            clearPendingRemoteCommand()
+        }
+    }
+
+    private func extractOTPFromReturnBody(_ body: String) -> String? {
+        guard let range = body.range(of: "OTP:\\s*\\d+", options: .regularExpression) else { return nil }
+        return body[range].split(separator: ":").last.map { $0.trimmingCharacters(in: .whitespaces) }
     }
 }
