@@ -125,6 +125,15 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         LogManager.shared.log(category: .apns, message: "Successfully registered for remote notifications with token: \(LogRedactor.tail(tokenString))")
     }
 
+    /// Extracts the alert body from a return notification sent back by Loop, if present.
+    private func returnNotificationBody(from userInfo: [AnyHashable: Any]) -> String? {
+        guard let aps = userInfo["aps"] as? [String: Any] else { return nil }
+        if let alert = aps["alert"] as? [String: Any] {
+            return alert["body"] as? String
+        }
+        return aps["alert"] as? String
+    }
+
     /// Called when failed to register for remote notifications
     func application(_: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
         LogManager.shared.log(category: .apns, message: "Failed to register for remote notifications: \(error.localizedDescription)")
@@ -156,6 +165,13 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
                     LogManager.shared.log(category: .apns, message: "Command type: \(commandType)")
                 }
             }
+        }
+
+        // OTP auto-retry: if Loop rejected a remote command because its
+        // one-time password expired, LoopAPNSService resends it once with a
+        // fresh password. That error guarantees the command was not acted on.
+        if let body = returnNotificationBody(from: userInfo) {
+            LoopAPNSService().processReturnNotification(body: body)
         }
 
         // Call completion handler
@@ -279,6 +295,11 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
         if content.interruptionLevel == .passive || (content.title.isEmpty && content.body.isEmpty) {
             completionHandler([])
             return
+        }
+
+        // OTP auto-retry for foreground delivery of Loop return notifications.
+        if !content.body.isEmpty {
+            LoopAPNSService().processReturnNotification(body: content.body)
         }
 
         completionHandler([.banner, .sound, .badge])
