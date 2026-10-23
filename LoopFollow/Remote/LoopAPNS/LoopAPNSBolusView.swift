@@ -27,7 +27,7 @@ struct LoopAPNSBolusView: View {
     private let otpPeriod: TimeInterval = 30
     private let timeAdjustmentStepMinutes = 5
     private let maxPastHours = 4
-    private let maxFutureHours = 4
+    private let maxFutureMinutes = 135 // 2 hours 15 minutes
     private var otpTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     // Computed property to check if TOTP should be blocked
@@ -40,7 +40,7 @@ struct LoopAPNSBolusView: View {
     }
 
     private var latestAcceptedDate: Date {
-        Date().addingTimeInterval(TimeInterval(maxFutureHours) * 60 * 60)
+        Date().addingTimeInterval(TimeInterval(maxFutureMinutes) * 60)
     }
 
     enum AlertType {
@@ -439,10 +439,10 @@ struct LoopAPNSBolusView: View {
             return
         }
 
-        // Validate time constraints: bolus time must be within +/-4 hours
+        // Validate time constraints: bolus time must be within the allowed window (4 hours past, 2 hours 15 minutes future)
         let now = Date()
         let oldestAcceptedDate = now.addingTimeInterval(-60 * 60 * Double(maxPastHours))
-        let latestAcceptedDate = now.addingTimeInterval(60 * 60 * Double(maxFutureHours))
+        let latestAcceptedDate = now.addingTimeInterval(60 * Double(maxFutureMinutes))
 
         if bolusDate < oldestAcceptedDate {
             alertMessage = "Time must be within the prior \(maxPastHours) hours"
@@ -452,7 +452,7 @@ struct LoopAPNSBolusView: View {
         }
 
         if bolusDate > latestAcceptedDate {
-            alertMessage = "Time must be within the next \(maxFutureHours) hours"
+            alertMessage = "Time must be within the next 2 hours and 15 minutes"
             alertType = .error
             showAlert = true
             return
