@@ -24,8 +24,8 @@ struct LoopAPNSCarbsView: View {
     @State private var showTOTPWarning = false
     private let otpPeriod: TimeInterval = 30
     private let timeAdjustmentStepMinutes = 5
-    private let maxPastHours = 12
-    private let maxFutureHours = 1
+    private let maxPastHours = 4
+    private let maxFutureHours = 4
     private let minAllowedAbsorptionTime = 0.5
     private let maxAllowedAbsorptionTime = 8.0
     private let lollipopStandardAbsorption: AbsorptionPreset = (0, 30)
@@ -539,7 +539,7 @@ struct LoopAPNSCarbsView: View {
         }
 
         if consumedDate > latestAcceptedDate {
-            alertMessage = "Time must be within the next \(maxFutureHours) hour"
+            alertMessage = "Time must be within the next \(maxFutureHours) hours"
             alertType = .error
             showAlert = true
             return
